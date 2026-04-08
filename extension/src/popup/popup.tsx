@@ -128,11 +128,17 @@ function App() {
   const [result, setResult] = useState<ScanResult | null>(null);
   const [tabUrl, setTabUrl] = useState<string>('');
   const [isRescanning, setIsRescanning] = useState(false);
+  const [endpointId, setEndpointId] = useState<string>('Not generated yet');
 
   const loadScan = useCallback(() => {
     chrome.runtime.sendMessage({ type: 'GET_SCAN' }, (response) => {
       if (response?.result) setResult(response.result);
       if (response?.tabUrl) setTabUrl(response.tabUrl);
+    });
+    chrome.storage.local.get('endpoint_id', (stored) => {
+      if (typeof stored?.endpoint_id === 'string' && stored.endpoint_id.trim().length > 0) {
+        setEndpointId(stored.endpoint_id);
+      }
     });
   }, []);
 
@@ -375,6 +381,15 @@ function App() {
               )}
             </div>
           ) : null}
+
+          <div style={{ marginTop: 10, paddingTop: 8, borderTop: '1px dashed rgba(255,255,255,0.08)' }}>
+            <div style={{ fontSize: 10, color: 'rgba(255,255,255,0.35)', marginBottom: 2, textTransform: 'uppercase', letterSpacing: '0.06em' }}>
+              Endpoint ID
+            </div>
+            <div style={{ fontFamily: 'monospace', fontSize: 11, color: '#34d399', wordBreak: 'break-all' }}>
+              {endpointId}
+            </div>
+          </div>
         </div>
       </div>
 
