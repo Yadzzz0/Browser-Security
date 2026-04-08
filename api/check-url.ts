@@ -4,6 +4,27 @@ import type { VercelRequest, VercelResponse } from '@vercel/node';
 import { createClient } from '@supabase/supabase-js';
 import tls from 'tls';
 
+type ScanStatus = 'safe' | 'warning' | 'danger';
+
+interface QuickVerdict {
+  status: ScanStatus | 'unknown';
+  label: string;
+  confidence: number;
+  phishingProbability: number;
+  legitimateProbability: number;
+  modelUsed: string;
+  reason: string;
+}
+
+interface ScanLogPayload {
+  endpointId?: string;
+  userId?: string;
+  url: string;
+  status: ScanStatus;
+  confidence: number;
+  modelUsed: string;
+}
+
 function checkStrongSSL(hostname: string): Promise<{ valid: boolean, issuer: string, isFreeCA: boolean, ageDays: number }> {
   return new Promise((resolve) => {
     if (hostname === 'localhost' || hostname === '127.0.0.1') {
@@ -49,6 +70,128 @@ function checkStrongSSL(hostname: string): Promise<{ valid: boolean, issuer: str
 
 const HF_API_URL = 'https://alimusarizvi-phishing.hf.space/predict';
 
+const HIGH_TRUST_SUFFIXES = [
+  'google.com',
+  'googleusercontent.com',
+  'gstatic.com',
+  'youtube.com',
+  'github.com',
+  'microsoft.com',
+  'apple.com',
+  'amazon.com',
+  'wikipedia.org',
+  'cloudflare.com',
+  'supabase.co',
+  'vercel.app',
+];
+
+const HIGH_TRUST_REGEXES = [
+  /^([a-z0-9-]+\.)*google\.[a-z.]+$/i,
+  /^([a-z0-9-]+\.)*github\.[a-z.]+$/i,
+];
+
+const SUSPICIOUS_TOKENS = [
+  'login',
+  'signin',
+  'verify',
+  'secure',
+  'update',
+  'password',
+  'account',
+  'bank',
+  'wallet',
+  'auth',
+  'confirm',
+];
+
+function isHighTrustHost(hostname: string): boolean {
+  const host = hostname.toLowerCase();
+  if (HIGH_TRUST_SUFFIXES.some((suffix) => host === suffix || host.endsWith(`.${suffix}`))) {
+    return true;
+  }
+  return HIGH_TRUST_REGEXES.some((pattern) => pattern.test(host));
+}
+
+function getQuickVerdict(parsedUrl: URL): QuickVerdict {
+  const href = parsedUrl.href.toLowerCase();
+  const host = parsedUrl.hostname.toLowerCase();
+  const hostSegments = host.split('.');
+  const hasAtSymbol = parsedUrl.href.includes('@');
+  const hasPunycode = host.includes('xn--');
+  const hasSuspiciousToken = SUSPICIOUS_TOKENS.some((token) => href.includes(token));
+  const hasExcessiveSubdomains = hostSegments.length > 5;
+  const isRawIPv4 = /^(\d{1,3}\.){3}\d{1,3}$/.test(host);
+
+  if (parsedUrl.protocol === 'https:' && isHighTrustHost(host) && !hasAtSymbol && !hasPunycode) {
+    return {
+      status: 'safe',
+      label: 'legitimate',
+      confidence: 0.995,
+      phishingProbability: 0.005,
+      legitimateProbability: 0.995,
+      modelUsed: 'RuleEngine::TrustedDomain',
+      reason: 'trusted_https_domain',
+    };
+  }
+
+  if (
+    hasAtSymbol ||
+    hasPunycode ||
+    hasExcessiveSubdomains ||
+    (isRawIPv4 && hasSuspiciousToken) ||
+    (parsedUrl.protocol !== 'https:' && hasSuspiciousToken)
+  ) {
+    return {
+      status: 'danger',
+      label: 'phishing',
+      confidence: 0.93,
+      phishingProbability: 0.93,
+      legitimateProbability: 0.07,
+      modelUsed: 'RuleEngine::RiskHeuristics',
+      reason: 'high_risk_url_pattern',
+    };
+  }
+
+  return {
+    status: 'unknown',
+    label: 'unknown',
+    confidence: 0,
+    phishingProbability: 0,
+    legitimateProbability: 0,
+    modelUsed: 'RuleEngine::Unknown',
+    reason: 'requires_ml_analysis',
+  };
+}
+
+async function logScanToSupabase(payload: ScanLogPayload): Promise<void> {
+  if (!payload.endpointId && !payload.userId) return;
+
+  const supabaseUrl = process.env.SUPABASE_URL || process.env.VITE_SUPABASE_URL;
+  const supabaseAnonKey = process.env.SUPABASE_ANON_KEY || process.env.VITE_SUPABASE_ANON_KEY;
+  if (!supabaseUrl || !supabaseAnonKey) return;
+
+  const supabase = createClient(supabaseUrl, supabaseAnonKey);
+  const actionTaken =
+    payload.status === 'danger' ? 'Blocked' : payload.status === 'warning' ? 'Warned' : 'Passed';
+
+  const baseInsert = {
+    endpoint_id: payload.endpointId,
+    url: payload.url,
+    status: payload.status,
+    confidence: payload.confidence,
+    model_used: payload.modelUsed,
+    action_taken: actionTaken,
+  };
+
+  if (payload.userId) {
+    const withUser = { ...baseInsert, user_id: payload.userId };
+    const withUserRes = await supabase.from('scan_logs').insert(withUser);
+    if (!withUserRes.error) return;
+  }
+
+  await supabase.from('scan_logs').insert(baseInsert);
+}
+
 export default async function handler(req: VercelRequest, res: VercelResponse) {
   // CORS headers – allow extension and portal to call this
   res.setHeader('Access-Control-Allow-Origin', '*');
@@ -78,6 +221,39 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
   const startTime = Date.now();
   const endpointId = typeof req.body?.endpoint_id === 'string' ? req.body.endpoint_id : undefined;
+  const userId = typeof req.body?.user_id === 'string' ? req.body.user_id : undefined;
+
+  const quickVerdict = getQuickVerdict(parsedUrl);
+  if (quickVerdict.status !== 'unknown') {
+    const sslStatus = parsedUrl.protocol === 'https:' ? 'safe' : 'danger';
+    const quickStatus = quickVerdict.status as ScanStatus;
+    await logScanToSupabase({
+      endpointId,
+      userId,
+      url: parsedUrl.href,
+      status: quickStatus,
+      confidence: quickVerdict.confidence,
+      modelUsed: quickVerdict.modelUsed,
+    });
+
+    return res.status(200).json({
+      url: parsedUrl.href,
+      status: quickStatus,
+      label: quickVerdict.label,
+      confidence: quickVerdict.confidence,
+      phishingProbability: quickVerdict.phishingProbability,
+      legitimateProbability: quickVerdict.legitimateProbability,
+      inferenceTimeMs: 0,
+      totalTimeMs: Date.now() - startTime,
+      modelUsed: quickVerdict.modelUsed,
+      ssl: {
+        status: sslStatus,
+        text: parsedUrl.protocol === 'https:' ? 'HTTPS – Trusted domain check passed' : 'HTTP – Unencrypted',
+      },
+      timestamp: new Date().toISOString(),
+      reason: quickVerdict.reason,
+    });
+  }
 
   try {
     const hfResponse = await fetch(HF_API_URL, {
@@ -101,9 +277,8 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     if (parsedUrl.protocol !== 'https:') {
       sslRiskScore += 0.4;
     } else {
-      if (!sslDetails.valid) sslRiskScore += 0.5;
-      if (sslDetails.isFreeCA) sslRiskScore += 0.25;
-      if (sslDetails.ageDays < 30) sslRiskScore += 0.35; // Young certs are highly suspicious for phishing
+      if (!sslDetails.valid) sslRiskScore += 0.45;
+      if (sslDetails.ageDays < 7) sslRiskScore += 0.2;
     }
 
     // Override Model strictness based on TLS characteristics
@@ -168,27 +343,14 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     }
     // ---------------------------------------------------------------
 
-    // --- SUPABASE DATABASE LOGGING ---
-    // Objective 8: Log anonymous endpoint scans to the global Threat Intelligence Database
-    const supabaseUrl = process.env.SUPABASE_URL || process.env.VITE_SUPABASE_URL;
-    const supabaseAnonKey = process.env.SUPABASE_ANON_KEY || process.env.VITE_SUPABASE_ANON_KEY;
-    if (supabaseUrl && supabaseAnonKey && endpointId) {
-      try {
-        const supabase = createClient(supabaseUrl, supabaseAnonKey);
-        
-        await supabase.from('scan_logs').insert({
-          endpoint_id: endpointId,
-          url: parsedUrl.href,
-          status: status,
-          confidence: hfData.confidence,
-          model_used: hfData.model_used || 'ModernBERT Ensemble',
-          action_taken: status === 'danger' ? 'Blocked' : status === 'warning' ? 'Warned' : 'Passed'
-        });
-      } catch (e) {
-        console.error('Failed to log to Supabase:', e);
-      }
-    }
-    // ---------------------------------
+    await logScanToSupabase({
+      endpointId,
+      userId,
+      url: parsedUrl.href,
+      status,
+      confidence: hfData.confidence,
+      modelUsed: hfData.model_used || 'ModernBERT Ensemble',
+    });
 
     return res.status(200).json({
       url: parsedUrl.href,

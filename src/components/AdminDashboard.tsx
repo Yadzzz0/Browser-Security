@@ -1,9 +1,9 @@
 import React, { useState, useMemo, useEffect } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
-import { HashRouter, Routes, Route, useNavigate, useParams, useLocation } from 'react-router-dom';
+import { HashRouter, Routes, Route, useNavigate, useParams } from 'react-router-dom';
 import { 
   ShieldCheck, Activity, Users, Database, Settings, Bell, Search, 
-  ChevronDown, ArrowUpRight, ArrowDownRight, ShieldAlert, Cpu, Globe, AlertTriangle,
+  ArrowUpRight, ArrowDownRight, ShieldAlert, Cpu, Globe, AlertTriangle,
   Laptop, Monitor, Power, RefreshCw, CheckCircle2, XCircle, Info, MoreVertical, Filter,
   ArrowLeft, Server, Terminal
 } from 'lucide-react';
@@ -48,25 +48,139 @@ const initialNotifications = [
 ];
 
 // --- Supabase Client ---
-import { createClient } from '@supabase/supabase-js';
+import { createClient, type Session } from '@supabase/supabase-js';
 
 const supabaseUrl = (import.meta as any).env.VITE_SUPABASE_URL || 'https://placeholder.supabase.co';
 const supabaseKey = (import.meta as any).env.VITE_SUPABASE_ANON_KEY || 'placeholder';
 const supabase = createClient(supabaseUrl, supabaseKey);
 
+type UserRole = 'admin' | 'user';
+
+interface ManagedUser {
+  id: string;
+  email: string;
+  display_name?: string | null;
+  role: UserRole;
+  created_at?: string;
+}
+
+function parseRole(value: unknown): UserRole | null {
+  if (value === 'admin' || value === 'user') return value;
+  return null;
+}
+
+async function ensureUserProfileRow(session: Session): Promise<void> {
+  const displayName =
+    (session.user.user_metadata?.display_name as string | undefined) ||
+    (session.user.email ? session.user.email.split('@')[0] : 'User');
+
+  const withRole = await supabase.from('user_profiles').upsert(
+    {
+      id: session.user.id,
+      email: session.user.email,
+      display_name: displayName,
+      role: 'user',
+    },
+    { onConflict: 'id' }
+  );
+
+  if (!withRole.error) return;
+
+  // Fallback for schemas that don't yet contain a role column.
+  await supabase.from('user_profiles').upsert(
+    {
+      id: session.user.id,
+      email: session.user.email,
+      display_name: displayName,
+    },
+    { onConflict: 'id' }
+  );
+}
+
+async function resolveUserRole(session: Session): Promise<UserRole> {
+  const metadataRole = parseRole(session.user.user_metadata?.role);
+  if (metadataRole) return metadataRole;
+
+  const adminById = await supabase.from('admin_users').select('id').eq('id', session.user.id).maybeSingle();
+  if (adminById.data) return 'admin';
+
+  if (session.user.email) {
+    const adminByEmail = await supabase
+      .from('admin_users')
+      .select('id')
+      .eq('email', session.user.email)
+      .maybeSingle();
+    if (adminByEmail.data) return 'admin';
+  }
+
+  const profileById = await supabase.from('user_profiles').select('role').eq('id', session.user.id).maybeSingle();
+  const profileRole = parseRole(profileById.data?.role);
+  if (profileRole) return profileRole;
+
+  await ensureUserProfileRow(session);
+  return 'user';
+}
+
 // --- Auth Component ---
 function LoginScreen() {
+  const [mode, setMode] = useState<'login' | 'signup'>('login');
+  const [fullName, setFullName] = useState('');
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [error, setError] = useState('');
+  const [info, setInfo] = useState('');
   const [loading, setLoading] = useState(false);
 
-  const handleLogin = async (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setLoading(true);
     setError('');
-    const { error } = await supabase.auth.signInWithPassword({ email, password });
-    if (error) setError(error.message);
+    setInfo('');
+
+    if (mode === 'login') {
+      const { error: loginError } = await supabase.auth.signInWithPassword({ email, password });
+      if (loginError) setError(loginError.message);
+      setLoading(false);
+      return;
+    }
+
+    const safeName = fullName.trim() || (email.includes('@') ? email.split('@')[0] : 'User');
+    const { data, error: signUpError } = await supabase.auth.signUp({
+      email,
+      password,
+      options: {
+        data: {
+          role: 'user',
+          display_name: safeName,
+        },
+      },
+    });
+
+    if (signUpError) {
+      setError(signUpError.message);
+      setLoading(false);
+      return;
+    }
+
+    if (data.user) {
+      const profileInsert = {
+        id: data.user.id,
+        email: data.user.email,
+        display_name: safeName,
+        role: 'user',
+      };
+
+      const withRole = await supabase.from('user_profiles').upsert(profileInsert, { onConflict: 'id' });
+      if (withRole.error) {
+        await supabase.from('user_profiles').upsert(
+          { id: data.user.id, email: data.user.email, display_name: safeName },
+          { onConflict: 'id' }
+        );
+      }
+    }
+
+    setInfo('Signup successful. If email confirmation is enabled, please verify your email and then login.');
+    setMode('login');
     setLoading(false);
   };
 
@@ -77,29 +191,56 @@ function LoginScreen() {
         <div className="relative">
           <div className="flex items-center justify-center mb-8">
             <ShieldCheck className="w-10 h-10 text-emerald-500 mr-3" />
-            <span className="font-display font-bold text-2xl tracking-tight">SafeBrowse<span className="text-emerald-500">.Admin</span></span>
+            <span className="font-display font-bold text-2xl tracking-tight">SafeBrowse<span className="text-emerald-500">.Portal</span></span>
           </div>
-          <form onSubmit={handleLogin} className="space-y-4">
+
+          <div className="grid grid-cols-2 gap-2 bg-black/30 rounded-lg p-1 mb-5">
+            <button
+              type="button"
+              onClick={() => { setMode('login'); setError(''); setInfo(''); }}
+              className={`py-2 rounded-md text-sm transition-colors ${mode === 'login' ? 'bg-emerald-500 text-black font-semibold' : 'text-white/70 hover:text-white'}`}
+            >
+              Login
+            </button>
+            <button
+              type="button"
+              onClick={() => { setMode('signup'); setError(''); setInfo(''); }}
+              className={`py-2 rounded-md text-sm transition-colors ${mode === 'signup' ? 'bg-emerald-500 text-black font-semibold' : 'text-white/70 hover:text-white'}`}
+            >
+              Sign Up
+            </button>
+          </div>
+
+          <form onSubmit={handleSubmit} className="space-y-4">
+            {mode === 'signup' && (
+              <div>
+                <label className="block text-sm text-white/60 mb-1.5 ml-1">Full Name</label>
+                <input type="text" value={fullName} onChange={e => setFullName(e.target.value)}
+                  className="w-full bg-black/50 border border-white/10 rounded-lg px-4 py-3 text-sm text-white outline-none focus:border-emerald-500/50 transition-colors"
+                  placeholder="John Doe" />
+              </div>
+            )}
             <div>
-              <label className="block text-sm text-white/60 mb-1.5 ml-1">Admin Email</label>
+              <label className="block text-sm text-white/60 mb-1.5 ml-1">Email</label>
               <input type="email" required value={email} onChange={e => setEmail(e.target.value)}
                 className="w-full bg-black/50 border border-white/10 rounded-lg px-4 py-3 text-sm text-white outline-none focus:border-emerald-500/50 transition-colors"
-                placeholder="admin@safebrowse.com" />
+                placeholder="user@safebrowse.com" />
             </div>
             <div>
-              <label className="block text-sm text-white/60 mb-1.5 ml-1">Master Password</label>
+              <label className="block text-sm text-white/60 mb-1.5 ml-1">Password</label>
               <input type="password" required value={password} onChange={e => setPassword(e.target.value)}
                 className="w-full bg-black/50 border border-white/10 rounded-lg px-4 py-3 text-sm text-white outline-none focus:border-emerald-500/50 transition-colors"
                 placeholder="••••••••" />
             </div>
             {error && <div className="text-red-400 text-sm bg-red-500/10 p-3 rounded-lg border border-red-500/20">{error}</div>}
+            {info && <div className="text-emerald-300 text-sm bg-emerald-500/10 p-3 rounded-lg border border-emerald-500/20">{info}</div>}
             <button type="submit" disabled={loading}
               className="w-full py-3 mt-4 bg-emerald-500 hover:bg-emerald-400 text-black font-semibold rounded-lg transition-colors flex justify-center items-center">
-              {loading ? <RefreshCw className="w-5 h-5 animate-spin" /> : 'Secure Login'}
+              {loading ? <RefreshCw className="w-5 h-5 animate-spin" /> : mode === 'login' ? 'Secure Login' : 'Create Account'}
             </button>
           </form>
           <div className="mt-6 text-center text-xs text-white/40">
-            Authorized Security Personnel Only.<br/>Create admin accounts securely via the Supabase Dashboard.
+            User accounts can sign up here.<br/>Admin accounts should be created and role-assigned in Supabase.
           </div>
         </div>
       </div>
@@ -110,22 +251,45 @@ function LoginScreen() {
 // --- Main Component ---
 
 export default function AdminDashboard() {
-  const [session, setSession] = useState<any>(null);
+  const [session, setSession] = useState<Session | null>(null);
+  const [role, setRole] = useState<UserRole | null>(null);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    supabase.auth.getSession().then(({ data: { session } }) => {
-      setSession(session);
+    let isMounted = true;
+
+    const syncAuthState = async (nextSession: Session | null) => {
+      if (!isMounted) return;
+      setSession(nextSession);
+
+      if (!nextSession) {
+        setRole(null);
+        setLoading(false);
+        return;
+      }
+
+      setLoading(true);
+      const resolvedRole = await resolveUserRole(nextSession);
+      if (!isMounted) return;
+      setRole(resolvedRole);
       setLoading(false);
+    };
+
+    void supabase.auth.getSession().then(({ data: { session: initialSession } }) => syncAuthState(initialSession));
+
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, nextSession) => {
+      void syncAuthState(nextSession);
     });
-    const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
-      setSession(session);
-    });
-    return () => subscription.unsubscribe();
+
+    return () => {
+      isMounted = false;
+      subscription.unsubscribe();
+    };
   }, []);
 
   if (loading) return <div className="min-h-screen bg-[#050505] text-white flex items-center justify-center"><RefreshCw className="w-6 h-6 animate-spin text-emerald-500 mr-2"/> Authenticating...</div>;
   if (!session) return <LoginScreen />;
+  if (role === 'user') return <UserDashboard session={session} onSignOut={() => supabase.auth.signOut()} />;
 
   return (
     <HashRouter>
@@ -137,7 +301,7 @@ export default function AdminDashboard() {
   );
 }
 
-function DashboardLayout({ session }: { session: any }) {
+function DashboardLayout({ session }: { session: Session }) {
   const [activeTab, setActiveTab] = useState('overview');
   const [showNotifications, setShowNotifications] = useState(false);
   const [notifications, setNotifications] = useState(initialNotifications);
@@ -174,7 +338,8 @@ function DashboardLayout({ session }: { session: any }) {
         
         <nav className="flex-1 py-6 px-3 space-y-1">
           <NavItem icon={<Activity />} label="Overview" active={activeTab === 'overview'} onClick={() => setActiveTab('overview')} />
-          <NavItem icon={<Users />} label="Endpoints" active={activeTab === 'endpoints'} onClick={() => setActiveTab('endpoints')} />
+          <NavItem icon={<Monitor />} label="Endpoints" active={activeTab === 'endpoints'} onClick={() => setActiveTab('endpoints')} />
+          <NavItem icon={<Users />} label="Users" active={activeTab === 'users'} onClick={() => setActiveTab('users')} />
           <NavItem icon={<ShieldAlert />} label="Threat Intel" active={activeTab === 'threats'} onClick={() => setActiveTab('threats')} />
           <NavItem icon={<Cpu />} label="ML Models" active={activeTab === 'models'} onClick={() => setActiveTab('models')} />
           <NavItem icon={<Database />} label="Data Logs" active={activeTab === 'logs'} onClick={() => setActiveTab('logs')} />
@@ -339,6 +504,7 @@ function DashboardLayout({ session }: { session: any }) {
         <div className="flex-1 overflow-y-auto custom-scrollbar p-8">
           {activeTab === 'overview' && <OverviewView />}
           {activeTab === 'endpoints' && <EndpointsView searchQuery={searchQuery} />}
+          {activeTab === 'users' && <UsersManagementView />}
           {activeTab === 'threats' && <ThreatIntelView />}
           {activeTab === 'models' && <MLModelsView />}
           {activeTab === 'logs' && <DataLogsView />}
@@ -351,6 +517,297 @@ function DashboardLayout({ session }: { session: any }) {
 
 // --- New Sub-Views ---
 
+function useUserThreats(userId: string) {
+  const [logs, setLogs] = useState<any[]>([]);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    async function fetchUserLogs() {
+      setLoading(true);
+
+      let userScopedRows: any[] = [];
+
+      const byUserId = await supabase
+        .from('scan_logs')
+        .select('*')
+        .eq('user_id', userId)
+        .order('created_at', { ascending: false })
+        .limit(200);
+
+      if (!byUserId.error && byUserId.data) {
+        userScopedRows = byUserId.data;
+      } else {
+        const ownerRows = await supabase.from('endpoint_owners').select('endpoint_id').eq('user_id', userId);
+        const endpointIds = (ownerRows.data || []).map((row: any) => row.endpoint_id).filter(Boolean);
+        if (endpointIds.length > 0) {
+          const byEndpoint = await supabase
+            .from('scan_logs')
+            .select('*')
+            .in('endpoint_id', endpointIds)
+            .order('created_at', { ascending: false })
+            .limit(200);
+          if (!byEndpoint.error && byEndpoint.data) {
+            userScopedRows = byEndpoint.data;
+          }
+        }
+      }
+
+      const mapped = userScopedRows.map((row: any) => ({
+        id: String(row.id || '').slice(0, 8),
+        time: new Date(row.created_at).toLocaleTimeString(),
+        date: new Date(row.created_at).toLocaleDateString(),
+        url: (row.url || '').replace(/^https?:\/\//, ''),
+        action: row.action_taken || (row.status === 'danger' ? 'Blocked' : row.status === 'warning' ? 'Warned' : 'Passed'),
+        confidence: `${Math.round((row.confidence || 0) * 1000) / 10}%`,
+        endpoint_id: row.endpoint_id || 'Unknown',
+      }));
+
+      setLogs(mapped);
+      setLoading(false);
+    }
+
+    if (userId) {
+      void fetchUserLogs();
+      const timer = setInterval(fetchUserLogs, 7000);
+      return () => clearInterval(timer);
+    }
+  }, [userId]);
+
+  return { logs, loading };
+}
+
+function UserDashboard({ session, onSignOut }: { session: Session; onSignOut: () => void | Promise<unknown> }) {
+  const { logs, loading } = useUserThreats(session.user.id);
+
+  const blockedCount = logs.filter((row) => row.action === 'Blocked').length;
+  const warnedCount = logs.filter((row) => row.action === 'Warned').length;
+
+  return (
+    <div className="min-h-screen bg-[#050505] text-white p-6 md:p-8">
+      <div className="max-w-7xl mx-auto">
+        <div className="flex flex-col md:flex-row md:items-end md:justify-between gap-4 mb-8">
+          <div>
+            <h1 className="text-3xl font-display font-bold mb-2">User Security Portal</h1>
+            <p className="text-white/40">Track phishing URLs encountered by your account and endpoints.</p>
+          </div>
+          <button
+            onClick={() => onSignOut()}
+            className="px-4 py-2 rounded-lg bg-red-500/10 border border-red-500/20 text-red-400 text-sm font-medium hover:bg-red-500/20 transition-colors flex items-center gap-2"
+          >
+            <Power className="w-4 h-4" /> Sign Out
+          </button>
+        </div>
+
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-8">
+          <div className="glass-panel p-5">
+            <div className="text-sm text-white/40 mb-1">Signed In As</div>
+            <div className="font-mono text-sm text-emerald-300 break-all">{session.user.email}</div>
+          </div>
+          <div className="glass-panel p-5">
+            <div className="text-sm text-white/40 mb-1">Total Scans</div>
+            <div className="text-2xl font-bold font-mono">{logs.length}</div>
+          </div>
+          <div className="glass-panel p-5">
+            <div className="text-sm text-white/40 mb-1">Threat Actions</div>
+            <div className="text-sm font-mono text-red-400">Blocked: {blockedCount} | Warned: {warnedCount}</div>
+          </div>
+        </div>
+
+        <div className="glass-panel overflow-hidden">
+          <div className="p-4 border-b border-white/10 bg-white/[0.02] font-display font-semibold">Your Recent Scan Logs</div>
+          <div className="grid grid-cols-[100px_110px_2fr_1fr_1fr_1fr] gap-3 p-4 border-b border-white/10 text-xs font-semibold text-white/40 uppercase tracking-wider bg-black/20">
+            <div>Log ID</div>
+            <div>Time</div>
+            <div>URL</div>
+            <div>Endpoint</div>
+            <div>Action</div>
+            <div>Confidence</div>
+          </div>
+
+          {loading ? (
+            <div className="p-8 text-center text-white/40">Loading your security activity...</div>
+          ) : logs.length === 0 ? (
+            <div className="p-8 text-center text-white/30">No user-linked logs yet. Once scans are linked to your account, they appear here.</div>
+          ) : (
+            logs.map((row) => (
+              <div key={row.id + row.time} className="grid grid-cols-[100px_110px_2fr_1fr_1fr_1fr] gap-3 p-4 border-b border-white/5 items-center hover:bg-white/[0.02] transition-colors">
+                <div className="font-mono text-xs text-white/50">{row.id}</div>
+                <div className="font-mono text-xs text-white/50">{row.time}</div>
+                <div className="font-mono text-sm text-white/80 truncate pr-2">{row.url}</div>
+                <div className="font-mono text-xs text-blue-300">{row.endpoint_id}</div>
+                <div className={`text-xs font-medium ${row.action === 'Blocked' ? 'text-red-400' : row.action === 'Warned' ? 'text-amber-400' : 'text-emerald-400'}`}>{row.action}</div>
+                <div className="font-mono text-xs text-emerald-300">{row.confidence}</div>
+              </div>
+            ))
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function UsersManagementView() {
+  const [users, setUsers] = useState<ManagedUser[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState('');
+  const [search, setSearch] = useState('');
+  const [savingUserId, setSavingUserId] = useState<string | null>(null);
+  const [canEditRole, setCanEditRole] = useState(true);
+
+  const loadUsers = async () => {
+    setLoading(true);
+    setError('');
+
+    const withRole = await supabase
+      .from('user_profiles')
+      .select('id,email,display_name,role,created_at')
+      .order('created_at', { ascending: false })
+      .limit(300);
+
+    if (!withRole.error && withRole.data) {
+      setCanEditRole(true);
+      setUsers(
+        withRole.data.map((row: any) => ({
+          id: row.id,
+          email: row.email || 'unknown@user',
+          display_name: row.display_name,
+          role: parseRole(row.role) || 'user',
+          created_at: row.created_at,
+        }))
+      );
+      setLoading(false);
+      return;
+    }
+
+    const fallback = await supabase
+      .from('user_profiles')
+      .select('id,email,display_name,created_at')
+      .order('created_at', { ascending: false })
+      .limit(300);
+
+    if (fallback.error) {
+      setError(fallback.error.message);
+      setUsers([]);
+      setLoading(false);
+      return;
+    }
+
+    setCanEditRole(false);
+    setUsers(
+      (fallback.data || []).map((row: any) => ({
+        id: row.id,
+        email: row.email || 'unknown@user',
+        display_name: row.display_name,
+        role: 'user',
+        created_at: row.created_at,
+      }))
+    );
+    setLoading(false);
+  };
+
+  useEffect(() => {
+    void loadUsers();
+  }, []);
+
+  const handleRoleChange = async (userId: string, nextRole: UserRole) => {
+    if (!canEditRole) return;
+    setSavingUserId(userId);
+    const result = await supabase.from('user_profiles').update({ role: nextRole }).eq('id', userId);
+    if (result.error) {
+      setError(result.error.message);
+      setSavingUserId(null);
+      return;
+    }
+    setUsers((prev) => prev.map((user) => (user.id === userId ? { ...user, role: nextRole } : user)));
+    setSavingUserId(null);
+  };
+
+  const filteredUsers = users.filter((user) => {
+    if (!search) return true;
+    const q = search.toLowerCase();
+    return (
+      user.email.toLowerCase().includes(q) ||
+      (user.display_name || '').toLowerCase().includes(q) ||
+      user.id.toLowerCase().includes(q)
+    );
+  });
+
+  return (
+    <motion.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.3 }}>
+      <div className="flex justify-between items-end mb-8">
+        <div>
+          <h1 className="text-3xl font-display font-bold mb-2">User Management</h1>
+          <p className="text-white/40">Manage user accounts, assign roles, and review account metadata.</p>
+        </div>
+        <button onClick={() => void loadUsers()} className="px-4 py-2 rounded-lg bg-white/5 border border-white/10 text-sm font-medium hover:bg-white/10 transition-colors flex items-center gap-2">
+          <RefreshCw className="w-4 h-4" /> Refresh
+        </button>
+      </div>
+
+      {!canEditRole && (
+        <div className="mb-6 p-4 rounded-xl border border-amber-500/20 bg-amber-500/10 text-amber-300 text-sm">
+          Role editing is disabled because the role column is missing in user_profiles. Add a role column to enable role-based updates.
+        </div>
+      )}
+
+      {error && (
+        <div className="mb-6 p-4 rounded-xl border border-red-500/20 bg-red-500/10 text-red-300 text-sm">
+          {error}
+        </div>
+      )}
+
+      <div className="glass-panel overflow-hidden">
+        <div className="p-4 border-b border-white/5 bg-white/[0.02] flex items-center gap-3">
+          <div className="flex items-center bg-white/5 rounded-lg px-3 py-1.5 border border-white/5 flex-1">
+            <Search className="w-4 h-4 text-white/30 mr-2" />
+            <input
+              type="text"
+              placeholder="Search by email, name or user id"
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+              className="bg-transparent border-none outline-none text-sm w-full text-white placeholder:text-white/30"
+            />
+          </div>
+        </div>
+
+        <div className="grid grid-cols-[2fr_1.5fr_1fr_1fr_1fr] gap-3 p-4 border-b border-white/10 text-xs font-semibold text-white/40 uppercase tracking-wider bg-black/20">
+          <div>Email</div>
+          <div>Name</div>
+          <div>Role</div>
+          <div>Created</div>
+          <div>User ID</div>
+        </div>
+
+        {loading ? (
+          <div className="p-8 text-center text-white/40">Loading users...</div>
+        ) : filteredUsers.length === 0 ? (
+          <div className="p-8 text-center text-white/30">No users found.</div>
+        ) : (
+          filteredUsers.map((user) => (
+            <div key={user.id} className="grid grid-cols-[2fr_1.5fr_1fr_1fr_1fr] gap-3 p-4 border-b border-white/5 items-center hover:bg-white/[0.02] transition-colors">
+              <div className="font-mono text-sm text-white/80 truncate pr-2">{user.email}</div>
+              <div className="text-sm text-white/70 truncate pr-2">{user.display_name || 'Not set'}</div>
+              <div>
+                <select
+                  disabled={!canEditRole || savingUserId === user.id}
+                  value={user.role}
+                  onChange={(e) => void handleRoleChange(user.id, e.target.value as UserRole)}
+                  className="bg-white/5 border border-white/10 text-sm text-white rounded-lg px-2 py-1 outline-none disabled:opacity-50"
+                >
+                  <option value="user">user</option>
+                  <option value="admin">admin</option>
+                </select>
+              </div>
+              <div className="font-mono text-xs text-white/50">{user.created_at ? new Date(user.created_at).toLocaleDateString() : '—'}</div>
+              <div className="font-mono text-xs text-emerald-300 truncate">{user.id}</div>
+            </div>
+          ))
+        )}
+      </div>
+    </motion.div>
+  );
+}
+
 function useLiveThreats() {
   const [threats, setThreats] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
@@ -360,15 +817,16 @@ function useLiveThreats() {
       const { data } = await supabase.from('scan_logs').select('*').order('created_at', { ascending: false }).limit(200);
       if (data) {
         const mapped = data.map((row: any) => ({
-          id: row.id.substring(0, 8),
+          id: String(row.id || '').substring(0, 8),
           time: new Date(row.created_at).toLocaleTimeString() + ' - ' + new Date(row.created_at).toLocaleDateString(),
-          url: row.url.replace(/^https?:\/\//, ''),
+          url: String(row.url || '').replace(/^https?:\/\//, ''),
           type: row.model_used || 'Phishing',
-          confidence: (row.confidence * 100).toFixed(1) + '%',
+          confidence: ((row.confidence || 0) * 100).toFixed(1) + '%',
           action: row.action_taken || (row.status === 'danger' ? 'Blocked' : 'Warned'),
           ip: 'Anonymous',
           country: 'Global',
-          endpoint_id: row.endpoint_id
+          endpoint_id: row.endpoint_id || 'Unlinked endpoint',
+          user_id: row.user_id || 'Unlinked user',
         }));
         setThreats(mapped);
       }
@@ -391,7 +849,13 @@ function ThreatIntelView() {
 
   const filtered = useMemo(() => allThreats.filter(t => {
     if (filterAction !== 'all' && t.action !== filterAction) return false;
-    if (searchQuery && !t.url.toLowerCase().includes(searchQuery.toLowerCase()) && !t.id.toLowerCase().includes(searchQuery.toLowerCase()) && !t.endpoint_id.toLowerCase().includes(searchQuery.toLowerCase())) return false;
+    if (
+      searchQuery &&
+      !t.url.toLowerCase().includes(searchQuery.toLowerCase()) &&
+      !t.id.toLowerCase().includes(searchQuery.toLowerCase()) &&
+      !t.endpoint_id.toLowerCase().includes(searchQuery.toLowerCase()) &&
+      !t.user_id.toLowerCase().includes(searchQuery.toLowerCase())
+    ) return false;
     return true;
   }), [allThreats, filterType, filterAction, searchQuery]);
 
@@ -424,6 +888,7 @@ function ThreatIntelView() {
           { label: 'Total Threats Mapped', value: allThreats.length, color: 'text-white' },
           { label: 'Phishing Vectors', value: allThreats.filter(t => t.action === 'Blocked' || t.action === 'Warned').length, color: 'text-red-400' },
           { label: 'Endpoints Tracking', value: new Set(allThreats.map(t => t.endpoint_id)).size, color: 'text-amber-400' },
+          { label: 'Users Impacted', value: new Set(allThreats.map(t => t.user_id).filter((id) => id !== 'Unlinked user')).size, color: 'text-cyan-400' },
           { label: 'Total Blocked', value: allThreats.filter(t => t.action === 'Blocked').length, color: 'text-emerald-400' },
         ].map(card => (
           <div key={card.label} className="glass-panel p-5">
@@ -450,8 +915,8 @@ function ThreatIntelView() {
               <option value="Passed">Passed</option>
             </select>
           </div>
-          <div className="grid grid-cols-[1fr_2fr_1fr_1fr_auto] gap-3 p-4 border-b border-white/10 text-xs font-semibold text-white/40 uppercase tracking-wider bg-black/20">
-            <div>Log ID</div><div>Target URL</div><div>Endpoint</div><div>Confidence</div><div>Action</div>
+          <div className="grid grid-cols-[1fr_2fr_1fr_1fr_1fr_auto] gap-3 p-4 border-b border-white/10 text-xs font-semibold text-white/40 uppercase tracking-wider bg-black/20">
+            <div>Log ID</div><div>Target URL</div><div>User</div><div>Endpoint</div><div>Confidence</div><div>Action</div>
           </div>
           {filtered.length === 0 ? (
             <div className="p-8 text-center text-white/30 text-sm">No live data found in Supabase. Scan a malicious URL using the extension!</div>
@@ -459,11 +924,12 @@ function ThreatIntelView() {
             filtered.map((threat, i) => (
               <motion.div key={threat.id} initial={{ opacity: 0 }} animate={{ opacity: 1 }} transition={{ delay: i * 0.04 }}
                 onClick={() => setSelected(threat.id === selected ? null : threat.id)}
-                className={`grid grid-cols-[1fr_2fr_1fr_1fr_auto] gap-3 p-4 border-b border-white/5 cursor-pointer transition-colors items-center ${
+                className={`grid grid-cols-[1fr_2fr_1fr_1fr_1fr_auto] gap-3 p-4 border-b border-white/5 cursor-pointer transition-colors items-center ${
                   selected === threat.id ? 'bg-emerald-500/[0.05] border-l-2 border-l-emerald-500' : 'hover:bg-white/[0.03]'
                 }`}>
                 <div className="font-mono text-xs text-white/50">{threat.id}</div>
                 <div className="font-mono text-sm text-white truncate pr-4">{threat.url}</div>
+                <div className="font-mono text-xs text-cyan-300 truncate pr-1">{threat.user_id}</div>
                 <div className="font-mono text-xs text-blue-400">{threat.endpoint_id}</div>
                 <div className="font-mono text-sm text-emerald-400">{threat.confidence}</div>
                 <div><span className={`text-xs font-medium flex items-center gap-1 ${
@@ -482,7 +948,7 @@ function ThreatIntelView() {
                 <ShieldAlert className="w-4 h-4 text-red-400" /> Live Threat Detail
               </h3>
               <div className="space-y-3">
-                {[['Log ID', selectedThreat.id], ['Time', selectedThreat.time], ['Target URL', selectedThreat.url], ['Model Version', selectedThreat.type], ['ML Confidence', selectedThreat.confidence], ['Action Taken', selectedThreat.action], ['Origin Endpoint', selectedThreat.endpoint_id], ['Privacy Status', 'Anonymous Tracking']].map(([k, v]) => (
+                {[['Log ID', selectedThreat.id], ['Time', selectedThreat.time], ['Target URL', selectedThreat.url], ['Model Version', selectedThreat.type], ['ML Confidence', selectedThreat.confidence], ['Action Taken', selectedThreat.action], ['User ID', selectedThreat.user_id], ['Origin Endpoint', selectedThreat.endpoint_id], ['Privacy Status', 'Anonymous Tracking']].map(([k, v]) => (
                   <div key={k} className="flex justify-between py-2 border-b border-white/5">
                     <span className="text-sm text-white/40">{k}</span>
                     <span className="text-sm font-mono text-white text-right max-w-[60%] break-all">{v}</span>
@@ -703,7 +1169,12 @@ function DataLogsView() {
     // Map action to level for filtering
     const level = l.action === 'Blocked' ? 'danger' : l.action === 'Warned' ? 'warning' : 'info';
     if (levelFilter !== 'all' && level !== levelFilter) return false;
-    if (logSearch && !l.url.toLowerCase().includes(logSearch.toLowerCase()) && !l.endpoint_id.toLowerCase().includes(logSearch.toLowerCase())) return false;
+    if (
+      logSearch &&
+      !l.url.toLowerCase().includes(logSearch.toLowerCase()) &&
+      !l.endpoint_id.toLowerCase().includes(logSearch.toLowerCase()) &&
+      !l.user_id.toLowerCase().includes(logSearch.toLowerCase())
+    ) return false;
     return true;
   }), [liveLogs, levelFilter, logSearch]);
 
@@ -734,8 +1205,8 @@ function DataLogsView() {
             <option value="info">Info</option>
           </select>
         </div>
-        <div className="grid grid-cols-[100px_160px_2fr_1fr_1fr] gap-4 p-4 border-b border-white/10 text-xs font-semibold text-white/40 uppercase tracking-wider bg-black/20">
-          <div>Log ID</div><div>Timestamp</div><div>Target URL</div><div>Endpoint</div><div>Confidence</div>
+        <div className="grid grid-cols-[100px_160px_2fr_1fr_1fr_1fr] gap-4 p-4 border-b border-white/10 text-xs font-semibold text-white/40 uppercase tracking-wider bg-black/20">
+          <div>Log ID</div><div>Timestamp</div><div>Target URL</div><div>User</div><div>Endpoint</div><div>Confidence</div>
         </div>
         
         {filteredLogs.length === 0 ? (
@@ -745,7 +1216,7 @@ function DataLogsView() {
             const level = log.action === 'Blocked' ? 'danger' : log.action === 'Warned' ? 'warning' : 'info';
             return (
               <motion.div key={log.id} initial={{ opacity: 0 }} animate={{ opacity: 1 }} transition={{ delay: i * 0.03 }}
-                className="grid grid-cols-[100px_160px_2fr_1fr_1fr] gap-4 p-4 border-b border-white/5 hover:bg-white/[0.02] transition-colors items-center">
+                className="grid grid-cols-[100px_160px_2fr_1fr_1fr_1fr] gap-4 p-4 border-b border-white/5 hover:bg-white/[0.02] transition-colors items-center">
                 <div className="font-mono text-xs text-white/40">{log.id}</div>
                 <div className="font-mono text-xs text-white/50">{log.time}</div>
                 <div className="flex items-center gap-2">
@@ -754,6 +1225,7 @@ function DataLogsView() {
                   {level === 'info' && <Info className="w-3.5 h-3.5 text-blue-400 shrink-0" />}
                   <span className="text-sm text-white/80 truncate">Scan: {log.url} - {log.action}</span>
                 </div>
+                <div className="font-mono text-xs text-cyan-300 truncate">{log.user_id}</div>
                 <div className="font-mono text-sm text-emerald-400">{log.endpoint_id}</div>
                 <div className="font-mono text-sm text-emerald-400">{log.confidence}</div>
               </motion.div>

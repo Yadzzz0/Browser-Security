@@ -120,12 +120,16 @@ async function scanUrl(url: string, tabId: number): Promise<ScanResult> {
 
   try {
     const endpoint_id = await getEndpointId();
+    const userIdentity = await chrome.storage.local.get('user_id');
+    const user_id = typeof userIdentity.user_id === 'string' ? userIdentity.user_id : undefined;
+    const requestPayload: Record<string, string> = { url, endpoint_id };
+    if (user_id) requestPayload.user_id = user_id;
     
     // Call Vercel Unified API Instead of Raw hugging Face
     const response = await fetch(VERCEL_API_URL, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ url, endpoint_id }),
+      body: JSON.stringify(requestPayload),
       signal: AbortSignal.timeout(15000), // 15s timeout
     });
 
