@@ -1,7 +1,7 @@
 // SafeBrowse - Background Service Worker (Manifest V3)
 // Handles real-time URL scanning when user navigates to a new page.
 
-const VERCEL_API_URL = 'http://localhost:3000/api/check-url'; // IMPORTANT: UPDATE TO VERCEL DOMAIN WHEN DEPLOYED
+const VERCEL_API_URL = 'https://safebrowser.vercel.app/api/check-url'; // IMPORTANT: UPDATE TO VERCEL DOMAIN WHEN DEPLOYED
 
 // Helper to get anonymous endpoint ID
 async function getEndpointId(): Promise<string> {
