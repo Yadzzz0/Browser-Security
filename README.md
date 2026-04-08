@@ -35,6 +35,7 @@ npx vercel
 - `VITE_SUPABASE_ANON_KEY`
 - `SUPABASE_URL` (optional fallback to `VITE_SUPABASE_URL`)
 - `SUPABASE_ANON_KEY` (optional fallback to `VITE_SUPABASE_ANON_KEY`)
+- `SUPABASE_SERVICE_ROLE_KEY` (recommended for server-side logging and endpoint linking)
 - `GOOGLE_SAFE_BROWSING_API_KEY` (optional, enables Google Safe Browsing checks)
 - `VIRUSTOTAL_API_KEY` (optional, enables VirusTotal checks)
 

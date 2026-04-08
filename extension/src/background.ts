@@ -1,7 +1,15 @@
 // SafeBrowse - Background Service Worker (Manifest V3)
 // Handles real-time URL scanning when user navigates to a new page.
 
-const VERCEL_API_URL = 'https://safebrowser.vercel.app/api/check-url'; // IMPORTANT: UPDATE TO VERCEL DOMAIN WHEN DEPLOYED
+const DEFAULT_VERCEL_API_URL = 'https://browser-security.vercel.app/api/check-url';
+
+async function getApiUrl(): Promise<string> {
+  const result = await chrome.storage.local.get('api_url');
+  if (typeof result.api_url === 'string' && result.api_url.trim().length > 0) {
+    return result.api_url.trim();
+  }
+  return DEFAULT_VERCEL_API_URL;
+}
 
 // Helper to get anonymous endpoint ID
 async function getEndpointId(): Promise<string> {
@@ -120,13 +128,14 @@ async function scanUrl(url: string, tabId: number): Promise<ScanResult> {
 
   try {
     const endpoint_id = await getEndpointId();
+    const apiUrl = await getApiUrl();
     const userIdentity = await chrome.storage.local.get('user_id');
     const user_id = typeof userIdentity.user_id === 'string' ? userIdentity.user_id : undefined;
     const requestPayload: Record<string, string> = { url, endpoint_id };
     if (user_id) requestPayload.user_id = user_id;
     
     // Call Vercel Unified API Instead of Raw hugging Face
-    const response = await fetch(VERCEL_API_URL, {
+    const response = await fetch(apiUrl, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(requestPayload),

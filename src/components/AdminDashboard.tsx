@@ -595,22 +595,22 @@ function UserDashboard({ session, onSignOut }: { session: Session; onSignOut: ()
     setLinking(true);
     setLinkMessage('');
 
-    const result = await supabase.from('endpoint_owners').upsert(
-      {
-        endpoint_id: endpointId,
-        user_id: session.user.id,
-        device_name: 'Linked by user portal',
-      },
-      { onConflict: 'endpoint_id' }
-    );
+    const response = await fetch('/api/link-endpoint', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ endpointId, userId: session.user.id }),
+    });
+    const payload = await response.json();
 
-    if (result.error) {
-      setLinkMessage(result.error.message);
+    if (!response.ok) {
+      setLinkMessage(payload?.detail || payload?.error || 'Failed to link endpoint.');
       setLinking(false);
       return;
     }
 
-    setLinkMessage('Endpoint linked successfully. New scans from this endpoint will appear in your logs.');
+    const linkedCount = typeof payload?.linkedScanCount === 'number' ? payload.linkedScanCount : 0;
+    const warning = payload?.ownerWarning ? ` ${payload.ownerWarning}` : '';
+    setLinkMessage(`Endpoint linked successfully. ${linkedCount} existing scan(s) were associated.${warning}`);
     setEndpointIdInput('');
     setLinking(false);
   };

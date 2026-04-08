@@ -167,10 +167,13 @@ async function logScanToSupabase(payload: ScanLogPayload): Promise<void> {
   if (!payload.endpointId && !payload.userId) return;
 
   const supabaseUrl = process.env.SUPABASE_URL || process.env.VITE_SUPABASE_URL;
-  const supabaseAnonKey = process.env.SUPABASE_ANON_KEY || process.env.VITE_SUPABASE_ANON_KEY;
-  if (!supabaseUrl || !supabaseAnonKey) return;
+  const supabaseApiKey =
+    process.env.SUPABASE_SERVICE_ROLE_KEY ||
+    process.env.SUPABASE_ANON_KEY ||
+    process.env.VITE_SUPABASE_ANON_KEY;
+  if (!supabaseUrl || !supabaseApiKey) return;
 
-  const supabase = createClient(supabaseUrl, supabaseAnonKey);
+  const supabase = createClient(supabaseUrl, supabaseApiKey);
   const actionTaken =
     payload.status === 'danger' ? 'Blocked' : payload.status === 'warning' ? 'Warned' : 'Passed';
 
@@ -187,9 +190,13 @@ async function logScanToSupabase(payload: ScanLogPayload): Promise<void> {
     const withUser = { ...baseInsert, user_id: payload.userId };
     const withUserRes = await supabase.from('scan_logs').insert(withUser);
     if (!withUserRes.error) return;
+    console.error('[check-url] Failed to insert user-linked scan log:', withUserRes.error.message);
   }
 
-  await supabase.from('scan_logs').insert(baseInsert);
+  const fallbackRes = await supabase.from('scan_logs').insert(baseInsert);
+  if (fallbackRes.error) {
+    console.error('[check-url] Failed to insert scan log:', fallbackRes.error.message);
+  }
 }
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {

@@ -139,7 +139,7 @@ with check (
 create policy "scan_logs_insert_authenticated"
 on public.scan_logs
 for insert
-to authenticated
+to anon, authenticated
 with check (true);
 
 create policy "scan_logs_select_own_or_admin"
