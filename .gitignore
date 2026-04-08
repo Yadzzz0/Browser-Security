@@ -1,0 +1,31 @@
+node_modules/
+build/
+dist/
+coverage/
+.DS_Store
+*.log
+
+# Sensitive content & Environment vars
+.env*
+!.env.example
+secrets.json
+*.pem
+*.key
+
+# Notebooks
+*.ipynb
+.ipynb_checkpoints/
+
+# Machine Learning Models
+# Ignore ModernBERT or any large generic model folders
+ModernBERT/
+modernbert/
+*.bin
+*.h5
+*.pb
+*.safetensors
+*.pt
+*.pth
+
+# Explicitly track LightGBM model
+!lgbm_best.txt
