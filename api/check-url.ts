@@ -1,6 +1,7 @@
 // Vercel Serverless Function: /api/check-url
 // Unified endpoint: calls HF ModernBERT API and returns phishing verdict.
 import type { VercelRequest, VercelResponse } from '@vercel/node';
+import { createClient } from '@supabase/supabase-js';
 import tls from 'tls';
 
 function checkStrongSSL(hostname: string): Promise<{ valid: boolean, issuer: string, isFreeCA: boolean, ageDays: number }> {
@@ -16,7 +17,18 @@ function checkStrongSSL(hostname: string): Promise<{ valid: boolean, issuer: str
           return resolve({ valid: false, issuer: 'Unknown', isFreeCA: true, ageDays: 0 });
         }
         const valid = socket.authorized;
-        const issuer = cert.issuer ? cert.issuer.O || cert.issuer.CN : 'Unknown';
+        const rawIssuerO = cert.issuer?.O;
+        const rawIssuerCN = cert.issuer?.CN;
+        const issuer =
+          typeof rawIssuerO === 'string'
+            ? rawIssuerO
+            : Array.isArray(rawIssuerO)
+              ? rawIssuerO[0]
+              : typeof rawIssuerCN === 'string'
+                ? rawIssuerCN
+                : Array.isArray(rawIssuerCN)
+                  ? rawIssuerCN[0]
+                  : 'Unknown';
         const freeCAs = ["Let's Encrypt", "Cloudflare", "ZeroSSL", "cPanel", "GoGetSSL", "Sectigo", "Google Trust Services", "Hostinger"];
         const isFreeCA = freeCAs.some(ca => issuer && issuer.includes(ca));
         const validFrom = cert.valid_from ? new Date(cert.valid_from).getTime() : Date.now();
@@ -65,6 +77,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   }
 
   const startTime = Date.now();
+  const endpointId = typeof req.body?.endpoint_id === 'string' ? req.body.endpoint_id : undefined;
 
   try {
     const hfResponse = await fetch(HF_API_URL, {
@@ -94,7 +107,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     }
 
     // Override Model strictness based on TLS characteristics
-    let finalPhishingProb = hfData.phishing_probability + sslRiskScore;
+    let finalPhishingProb = Math.min(1, Math.max(0, (hfData.phishing_probability ?? 0) + sslRiskScore));
     
     let status: 'safe' | 'warning' | 'danger';
     if (finalPhishingProb > 0.85) {
@@ -157,13 +170,14 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
     // --- SUPABASE DATABASE LOGGING ---
     // Objective 8: Log anonymous endpoint scans to the global Threat Intelligence Database
-    if (process.env.VITE_SUPABASE_URL && process.env.VITE_SUPABASE_ANON_KEY && req.body.endpoint_id) {
+    const supabaseUrl = process.env.SUPABASE_URL || process.env.VITE_SUPABASE_URL;
+    const supabaseAnonKey = process.env.SUPABASE_ANON_KEY || process.env.VITE_SUPABASE_ANON_KEY;
+    if (supabaseUrl && supabaseAnonKey && endpointId) {
       try {
-        const { createClient } = require('@supabase/supabase-js');
-        const supabase = createClient(process.env.VITE_SUPABASE_URL, process.env.VITE_SUPABASE_ANON_KEY);
+        const supabase = createClient(supabaseUrl, supabaseAnonKey);
         
         await supabase.from('scan_logs').insert({
-          endpoint_id: req.body.endpoint_id,
+          endpoint_id: endpointId,
           url: parsedUrl.href,
           status: status,
           confidence: hfData.confidence,
@@ -181,7 +195,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       status,
       label: hfData.label,
       confidence: hfData.confidence,
-      phishingProbability: hfData.phishing_probability,
+      phishingProbability: finalPhishingProb,
       legitimateProbability: hfData.legitimate_probability,
       inferenceTimeMs: hfData.inference_time_ms,
       totalTimeMs: totalTime,

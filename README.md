@@ -31,7 +31,14 @@ npx vercel
 ```
 
 **Environment Variables** (set in Vercel dashboard):
-- None required — the HF API URL is hardcoded in `api/check-url.ts`
+- `VITE_SUPABASE_URL`
+- `VITE_SUPABASE_ANON_KEY`
+- `SUPABASE_URL` (optional fallback to `VITE_SUPABASE_URL`)
+- `SUPABASE_ANON_KEY` (optional fallback to `VITE_SUPABASE_ANON_KEY`)
+- `GOOGLE_SAFE_BROWSING_API_KEY` (optional, enables Google Safe Browsing checks)
+- `VIRUSTOTAL_API_KEY` (optional, enables VirusTotal checks)
+
+Use `.env.example` as the template for local + Vercel setup.
 
 > [!IMPORTANT]
 > After deploying, update these files with your Vercel URL:
