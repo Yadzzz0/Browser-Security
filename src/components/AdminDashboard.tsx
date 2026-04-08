@@ -47,20 +47,97 @@ const initialNotifications = [
   { id: 4, title: 'Weekly Report Ready', desc: 'Security overview for Week 12 is available.', time: '1d ago', type: 'success', read: true },
 ];
 
+// --- Supabase Client ---
+import { createClient } from '@supabase/supabase-js';
+
+const supabaseUrl = (import.meta as any).env.VITE_SUPABASE_URL || 'https://placeholder.supabase.co';
+const supabaseKey = (import.meta as any).env.VITE_SUPABASE_ANON_KEY || 'placeholder';
+const supabase = createClient(supabaseUrl, supabaseKey);
+
+// --- Auth Component ---
+function LoginScreen() {
+  const [email, setEmail] = useState('');
+  const [password, setPassword] = useState('');
+  const [error, setError] = useState('');
+  const [loading, setLoading] = useState(false);
+
+  const handleLogin = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setLoading(true);
+    setError('');
+    const { error } = await supabase.auth.signInWithPassword({ email, password });
+    if (error) setError(error.message);
+    setLoading(false);
+  };
+
+  return (
+    <div className="min-h-screen bg-[#050505] text-white flex items-center justify-center p-4">
+      <div className="w-full max-w-md p-8 glass-panel border border-white/10 rounded-2xl relative overflow-hidden">
+        <div className="absolute inset-0 bg-gradient-to-br from-emerald-500/10 to-transparent opacity-50 pointer-events-none" />
+        <div className="relative">
+          <div className="flex items-center justify-center mb-8">
+            <ShieldCheck className="w-10 h-10 text-emerald-500 mr-3" />
+            <span className="font-display font-bold text-2xl tracking-tight">SafeBrowse<span className="text-emerald-500">.Admin</span></span>
+          </div>
+          <form onSubmit={handleLogin} className="space-y-4">
+            <div>
+              <label className="block text-sm text-white/60 mb-1.5 ml-1">Admin Email</label>
+              <input type="email" required value={email} onChange={e => setEmail(e.target.value)}
+                className="w-full bg-black/50 border border-white/10 rounded-lg px-4 py-3 text-sm text-white outline-none focus:border-emerald-500/50 transition-colors"
+                placeholder="admin@safebrowse.com" />
+            </div>
+            <div>
+              <label className="block text-sm text-white/60 mb-1.5 ml-1">Master Password</label>
+              <input type="password" required value={password} onChange={e => setPassword(e.target.value)}
+                className="w-full bg-black/50 border border-white/10 rounded-lg px-4 py-3 text-sm text-white outline-none focus:border-emerald-500/50 transition-colors"
+                placeholder="••••••••" />
+            </div>
+            {error && <div className="text-red-400 text-sm bg-red-500/10 p-3 rounded-lg border border-red-500/20">{error}</div>}
+            <button type="submit" disabled={loading}
+              className="w-full py-3 mt-4 bg-emerald-500 hover:bg-emerald-400 text-black font-semibold rounded-lg transition-colors flex justify-center items-center">
+              {loading ? <RefreshCw className="w-5 h-5 animate-spin" /> : 'Secure Login'}
+            </button>
+          </form>
+          <div className="mt-6 text-center text-xs text-white/40">
+            Authorized Security Personnel Only.<br/>Create admin accounts securely via the Supabase Dashboard.
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 // --- Main Component ---
 
 export default function AdminDashboard() {
+  const [session, setSession] = useState<any>(null);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    supabase.auth.getSession().then(({ data: { session } }) => {
+      setSession(session);
+      setLoading(false);
+    });
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
+      setSession(session);
+    });
+    return () => subscription.unsubscribe();
+  }, []);
+
+  if (loading) return <div className="min-h-screen bg-[#050505] text-white flex items-center justify-center"><RefreshCw className="w-6 h-6 animate-spin text-emerald-500 mr-2"/> Authenticating...</div>;
+  if (!session) return <LoginScreen />;
+
   return (
     <HashRouter>
       <Routes>
-        <Route path="/" element={<DashboardLayout />} />
+        <Route path="/" element={<DashboardLayout session={session} />} />
         <Route path="/endpoint/:id" element={<EndpointDetailView />} />
       </Routes>
     </HashRouter>
   );
 }
 
-function DashboardLayout() {
+function DashboardLayout({ session }: { session: any }) {
   const [activeTab, setActiveTab] = useState('overview');
   const [showNotifications, setShowNotifications] = useState(false);
   const [notifications, setNotifications] = useState(initialNotifications);
@@ -103,8 +180,11 @@ function DashboardLayout() {
           <NavItem icon={<Database />} label="Data Logs" active={activeTab === 'logs'} onClick={() => setActiveTab('logs')} />
         </nav>
         
-        <div className="p-4 border-t border-white/5">
+        <div className="p-4 border-t border-white/5 space-y-1">
           <NavItem icon={<Settings />} label="Settings" active={activeTab === 'settings'} onClick={() => setActiveTab('settings')} />
+          <button onClick={() => supabase.auth.signOut()} className="w-full flex items-center gap-3 px-3 py-2 rounded-lg text-sm font-medium text-red-400 hover:bg-red-500/10 transition-colors">
+            <Power className="w-4 h-4 shrink-0" /> Sign Out
+          </button>
         </div>
       </aside>
 
@@ -244,12 +324,13 @@ function DashboardLayout() {
             </div>
 
             <div className="flex items-center gap-3 pl-6 border-l border-white/10 cursor-pointer">
-              <div className="w-8 h-8 rounded-full bg-gradient-to-tr from-emerald-500 to-cyan-500"></div>
-              <div className="flex flex-col">
-                <span className="text-sm font-medium">Admin User</span>
-                <span className="text-xs text-white/40 font-mono">ID: ADM-092</span>
+              <div className="w-8 h-8 rounded-full bg-gradient-to-tr from-emerald-500 to-cyan-500 flex items-center justify-center text-xs font-bold text-white shadow-lg">
+                {session?.user?.email?.charAt(0).toUpperCase() || 'A'}
               </div>
-              <ChevronDown className="w-4 h-4 text-white/40" />
+              <div className="flex flex-col">
+                <span className="text-sm font-medium">Administrator</span>
+                <span className="text-xs text-white/40 font-mono truncate max-w-[120px]" title={session?.user?.email}>{session?.user?.email}</span>
+              </div>
             </div>
           </div>
         </header>
@@ -269,13 +350,6 @@ function DashboardLayout() {
 }
 
 // --- New Sub-Views ---
-
-import { createClient } from '@supabase/supabase-js';
-
-const supabase = createClient(
-  (import.meta as any).env.VITE_SUPABASE_URL || 'https://placeholder.supabase.co',
-  (import.meta as any).env.VITE_SUPABASE_ANON_KEY || 'placeholder'
-);
 
 function useLiveThreats() {
   const [threats, setThreats] = useState<any[]>([]);
