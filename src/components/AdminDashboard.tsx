@@ -578,9 +578,42 @@ function useUserThreats(userId: string) {
 
 function UserDashboard({ session, onSignOut }: { session: Session; onSignOut: () => void | Promise<unknown> }) {
   const { logs, loading } = useUserThreats(session.user.id);
+  const [endpointIdInput, setEndpointIdInput] = useState('');
+  const [linking, setLinking] = useState(false);
+  const [linkMessage, setLinkMessage] = useState('');
 
   const blockedCount = logs.filter((row) => row.action === 'Blocked').length;
   const warnedCount = logs.filter((row) => row.action === 'Warned').length;
+
+  const handleLinkEndpoint = async () => {
+    const endpointId = endpointIdInput.trim();
+    if (!endpointId) {
+      setLinkMessage('Enter a valid endpoint ID first.');
+      return;
+    }
+
+    setLinking(true);
+    setLinkMessage('');
+
+    const result = await supabase.from('endpoint_owners').upsert(
+      {
+        endpoint_id: endpointId,
+        user_id: session.user.id,
+        device_name: 'Linked by user portal',
+      },
+      { onConflict: 'endpoint_id' }
+    );
+
+    if (result.error) {
+      setLinkMessage(result.error.message);
+      setLinking(false);
+      return;
+    }
+
+    setLinkMessage('Endpoint linked successfully. New scans from this endpoint will appear in your logs.');
+    setEndpointIdInput('');
+    setLinking(false);
+  };
 
   return (
     <div className="min-h-screen bg-[#050505] text-white p-6 md:p-8">
@@ -611,6 +644,30 @@ function UserDashboard({ session, onSignOut }: { session: Session; onSignOut: ()
             <div className="text-sm text-white/40 mb-1">Threat Actions</div>
             <div className="text-sm font-mono text-red-400">Blocked: {blockedCount} | Warned: {warnedCount}</div>
           </div>
+        </div>
+
+        <div className="glass-panel p-5 mb-8">
+          <h2 className="font-display font-semibold mb-2">Link Endpoint to Your Account</h2>
+          <p className="text-sm text-white/50 mb-4">
+            Paste your extension endpoint ID (example: EP-abc12345) to associate scan logs with your user account.
+          </p>
+          <div className="flex flex-col md:flex-row gap-3">
+            <input
+              type="text"
+              value={endpointIdInput}
+              onChange={(e) => setEndpointIdInput(e.target.value)}
+              placeholder="EP-xxxxxxxx"
+              className="flex-1 bg-black/40 border border-white/10 rounded-lg px-4 py-2.5 text-sm text-white outline-none focus:border-emerald-500/50"
+            />
+            <button
+              onClick={() => void handleLinkEndpoint()}
+              disabled={linking}
+              className="px-4 py-2.5 rounded-lg bg-emerald-500 text-black font-semibold text-sm hover:bg-emerald-400 disabled:opacity-60 transition-colors"
+            >
+              {linking ? 'Linking...' : 'Link Endpoint'}
+            </button>
+          </div>
+          {linkMessage && <p className="mt-3 text-sm text-emerald-300">{linkMessage}</p>}
         </div>
 
         <div className="glass-panel overflow-hidden">
