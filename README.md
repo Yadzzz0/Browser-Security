@@ -75,7 +75,7 @@ Then in Chrome:
 
 | Model | Host | API |
 |-------|------|-----|
-| ModernBERT (Transformer) | Hugging Face Spaces | `POST https://alimusarizvi-phishing.hf.space/predict` |
+| ModernBERT (Transformer) | Hugging Face Spaces | `POST https://-phishing.hf.space/predict` |
 
 **HF API Request:**
 ```json
@@ -133,7 +133,7 @@ Working/
 
 1. User navigates to a URL in Chrome
 2. **Background service worker** intercepts via `webNavigation.onCompleted`
-3. Sends URL to `POST https://alimusarizvi-phishing.hf.space/predict`
+3. Sends URL to `POST https://-phishing.hf.space/predict`
 4. ModernBERT returns `{label, confidence, phishing_probability}`
 5. Badge turns **green** (safe) / **amber** (warning) / **red** (phishing)
 6. User clicks extension icon → sees detailed scan results
