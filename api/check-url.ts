@@ -171,7 +171,10 @@ async function logScanToSupabase(payload: ScanLogPayload): Promise<void> {
     process.env.SUPABASE_SERVICE_ROLE_KEY ||
     process.env.SUPABASE_ANON_KEY ||
     process.env.VITE_SUPABASE_ANON_KEY;
-  if (!supabaseUrl || !supabaseApiKey) return;
+  if (!supabaseUrl || !supabaseApiKey) {
+    console.error('[check-url] Missing Supabase environment variables');
+    return;
+  }
 
   const supabase = createClient(supabaseUrl, supabaseApiKey);
   const actionTaken =
@@ -186,16 +189,36 @@ async function logScanToSupabase(payload: ScanLogPayload): Promise<void> {
     action_taken: actionTaken,
   };
 
-  if (payload.userId) {
-    const withUser = { ...baseInsert, user_id: payload.userId };
-    const withUserRes = await supabase.from('scan_logs').insert(withUser);
-    if (!withUserRes.error) return;
-    console.error('[check-url] Failed to insert user-linked scan log:', withUserRes.error.message);
+  let targetUserId = payload.userId;
+
+  // Auto-link: if no user_id provided but endpoint_id is, check if endpoint is owned
+  if (!targetUserId && payload.endpointId) {
+    const { data: owner } = await supabase
+      .from('endpoint_owners')
+      .select('user_id')
+      .eq('endpoint_id', payload.endpointId)
+      .maybeSingle();
+    if (owner?.user_id) {
+      targetUserId = owner.user_id;
+    }
   }
 
+  if (targetUserId) {
+    const withUser = { ...baseInsert, user_id: targetUserId };
+    const withUserRes = await supabase.from('scan_logs').insert(withUser);
+    if (!withUserRes.error) return;
+    
+    // If user_id column is missing or failed, log specific detail
+    console.error(`[check-url] Failed to insert user-linked log (${targetUserId}):`, withUserRes.error.message);
+    if (withUserRes.error.message.includes('column "user_id" of relation "scan_logs" does not exist')) {
+       console.warn('[check-url] CRITICAL: user_id column is missing in scan_logs table. Run setup_database.sql');
+    }
+  }
+
+  // Fallback to anonymous log if user link failed or was never attempted
   const fallbackRes = await supabase.from('scan_logs').insert(baseInsert);
   if (fallbackRes.error) {
-    console.error('[check-url] Failed to insert scan log:', fallbackRes.error.message);
+    console.error('[check-url] Failed to insert anonymous scan log:', fallbackRes.error.message);
   }
 }
 

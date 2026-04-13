@@ -8,7 +8,13 @@ async function getApiUrl(): Promise<string> {
   if (typeof result.api_url === 'string' && result.api_url.trim().length > 0) {
     return result.api_url.trim();
   }
-  return DEFAULT_VERCEL_API_URL;
+  
+  const currentUrl = DEFAULT_VERCEL_API_URL;
+  if (currentUrl.includes('vercel.app') && currentUrl.startsWith('https://browser-security')) {
+    console.warn('[SafeBrowse] Using default Vercel API URL. If you have deployed your own, update this in background.ts or extension settings.');
+  }
+  
+  return currentUrl;
 }
 
 // Helper to get anonymous endpoint ID

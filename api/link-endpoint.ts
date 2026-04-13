@@ -41,14 +41,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   );
 
   if (ownerResult.error) {
-    if (
-      ownerResult.error.message.includes("Could not find the table") ||
-      ownerResult.error.message.includes('does not exist')
-    ) {
-      ownerWarning = 'endpoint_owners table is missing; linked existing logs by endpoint only.';
-    } else {
-      ownerWarning = ownerResult.error.message;
-    }
+    ownerWarning = ownerResult.error.message;
   } else {
     ownerLinked = true;
   }
