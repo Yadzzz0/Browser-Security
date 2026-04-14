@@ -50,7 +50,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
   let ownerLinked = false;
 
-  const ownerResult = await supabase.from('endpoint_owners').upsert(
+  const ownerResult = await supabase.from('browser_endpoint_owners').upsert(
     {
       endpoint_id: endpointId,
       user_id: userId,
@@ -68,7 +68,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   ownerLinked = true;
 
   const updateResult = await supabase
-    .from('scan_logs')
+    .from('browser_scan_logs')
     .update({ user_id: userId })
     .eq('endpoint_id', endpointId)
     .or(`user_id.is.null,user_id.eq.${userId}`)

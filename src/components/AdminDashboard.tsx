@@ -74,7 +74,7 @@ async function ensureUserProfileRow(session: Session): Promise<void> {
     (session.user.user_metadata?.display_name as string | undefined) ||
     (session.user.email ? session.user.email.split('@')[0] : 'User');
 
-  const withRole = await supabase.from('user_profiles').upsert(
+  const withRole = await supabase.from('browser_user_profiles').upsert(
     {
       id: session.user.id,
       email: session.user.email,
@@ -87,7 +87,7 @@ async function ensureUserProfileRow(session: Session): Promise<void> {
   if (!withRole.error) return;
 
   // Fallback for schemas that don't yet contain a role column.
-  await supabase.from('user_profiles').upsert(
+  await supabase.from('browser_user_profiles').upsert(
     {
       id: session.user.id,
       email: session.user.email,
@@ -101,19 +101,19 @@ async function resolveUserRole(session: Session): Promise<UserRole> {
   const metadataRole = parseRole(session.user.user_metadata?.role);
   if (metadataRole) return metadataRole;
 
-  const adminById = await supabase.from('admin_users').select('id').eq('id', session.user.id).maybeSingle();
+  const adminById = await supabase.from('browser_admin_users').select('id').eq('id', session.user.id).maybeSingle();
   if (adminById.data) return 'admin';
 
   if (session.user.email) {
     const adminByEmail = await supabase
-      .from('admin_users')
+      .from('browser_admin_users')
       .select('id')
       .eq('email', session.user.email)
       .maybeSingle();
     if (adminByEmail.data) return 'admin';
   }
 
-  const profileById = await supabase.from('user_profiles').select('role').eq('id', session.user.id).maybeSingle();
+  const profileById = await supabase.from('browser_user_profiles').select('role').eq('id', session.user.id).maybeSingle();
   const profileRole = parseRole(profileById.data?.role);
   if (profileRole) return profileRole;
 
@@ -170,9 +170,9 @@ function LoginScreen() {
         role: 'user',
       };
 
-      const withRole = await supabase.from('user_profiles').upsert(profileInsert, { onConflict: 'id' });
+      const withRole = await supabase.from('browser_user_profiles').upsert(profileInsert, { onConflict: 'id' });
       if (withRole.error) {
-        await supabase.from('user_profiles').upsert(
+        await supabase.from('browser_user_profiles').upsert(
           { id: data.user.id, email: data.user.email, display_name: safeName },
           { onConflict: 'id' }
         );
@@ -528,7 +528,7 @@ function useUserThreats(userId: string) {
       let userScopedRows: any[] = [];
 
       const byUserId = await supabase
-        .from('scan_logs')
+        .from('browser_scan_logs')
         .select('*')
         .eq('user_id', userId)
         .order('created_at', { ascending: false })
@@ -537,11 +537,11 @@ function useUserThreats(userId: string) {
       if (!byUserId.error && byUserId.data) {
         userScopedRows = byUserId.data;
       } else {
-        const ownerRows = await supabase.from('endpoint_owners').select('endpoint_id').eq('user_id', userId);
+        const ownerRows = await supabase.from('browser_endpoint_owners').select('endpoint_id').eq('user_id', userId);
         const endpointIds = (ownerRows.data || []).map((row: any) => row.endpoint_id).filter(Boolean);
         if (endpointIds.length > 0) {
           const byEndpoint = await supabase
-            .from('scan_logs')
+            .from('browser_scan_logs')
             .select('*')
             .in('endpoint_id', endpointIds)
             .order('created_at', { ascending: false })
@@ -735,7 +735,7 @@ function UsersManagementView() {
     setError('');
 
     const withRole = await supabase
-      .from('user_profiles')
+      .from('browser_user_profiles')
       .select('id,email,display_name,role,created_at')
       .order('created_at', { ascending: false })
       .limit(300);
@@ -756,7 +756,7 @@ function UsersManagementView() {
     }
 
     const fallback = await supabase
-      .from('user_profiles')
+      .from('browser_user_profiles')
       .select('id,email,display_name,created_at')
       .order('created_at', { ascending: false })
       .limit(300);
@@ -788,7 +788,7 @@ function UsersManagementView() {
   const handleRoleChange = async (userId: string, nextRole: UserRole) => {
     if (!canEditRole) return;
     setSavingUserId(userId);
-    const result = await supabase.from('user_profiles').update({ role: nextRole }).eq('id', userId);
+    const result = await supabase.from('browser_user_profiles').update({ role: nextRole }).eq('id', userId);
     if (result.error) {
       setError(result.error.message);
       setSavingUserId(null);
@@ -822,7 +822,7 @@ function UsersManagementView() {
 
       {!canEditRole && (
         <div className="mb-6 p-4 rounded-xl border border-amber-500/20 bg-amber-500/10 text-amber-300 text-sm">
-          Role editing is disabled because the role column is missing in user_profiles. Add a role column to enable role-based updates.
+          Role editing is disabled because the role column is missing in browser_user_profiles. Add a role column to enable role-based updates.
         </div>
       )}
 
@@ -890,7 +890,7 @@ function useLiveThreats() {
 
   useEffect(() => {
     async function fetchThreats() {
-      const { data } = await supabase.from('scan_logs').select('*').order('created_at', { ascending: false }).limit(200);
+      const { data } = await supabase.from('browser_scan_logs').select('*').order('created_at', { ascending: false }).limit(200);
       if (data) {
         const mapped = data.map((row: any) => ({
           id: String(row.id || '').substring(0, 8),

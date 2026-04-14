@@ -188,12 +188,12 @@ async function logScanToSupabase(payload: ScanLogPayload): Promise<void> {
 
   if (payload.userId) {
     const withUser = { ...baseInsert, user_id: payload.userId };
-    const withUserRes = await supabase.from('scan_logs').insert(withUser);
+    const withUserRes = await supabase.from('browser_scan_logs').insert(withUser);
     if (!withUserRes.error) return;
     console.error('[check-url] Failed to insert user-linked scan log:', withUserRes.error.message);
   }
 
-  const fallbackRes = await supabase.from('scan_logs').insert(baseInsert);
+  const fallbackRes = await supabase.from('browser_scan_logs').insert(baseInsert);
   if (fallbackRes.error) {
     console.error('[check-url] Failed to insert scan log:', fallbackRes.error.message);
   }
