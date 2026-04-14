@@ -581,6 +581,7 @@ function UserDashboard({ session, onSignOut }: { session: Session; onSignOut: ()
   const [endpointIdInput, setEndpointIdInput] = useState('');
   const [linking, setLinking] = useState(false);
   const [linkMessage, setLinkMessage] = useState('');
+  const [linkStatus, setLinkStatus] = useState<'idle' | 'success' | 'error'>('idle');
 
   const blockedCount = logs.filter((row) => row.action === 'Blocked').length;
   const warnedCount = logs.filter((row) => row.action === 'Warned').length;
@@ -594,23 +595,37 @@ function UserDashboard({ session, onSignOut }: { session: Session; onSignOut: ()
 
     setLinking(true);
     setLinkMessage('');
+    setLinkStatus('idle');
+
+    const { data: { session: activeSession } } = await supabase.auth.getSession();
+    const accessToken = activeSession?.access_token;
+    if (!accessToken) {
+      setLinkMessage('Session expired. Please sign in again and retry linking endpoint.');
+      setLinkStatus('error');
+      setLinking(false);
+      return;
+    }
 
     const response = await fetch('/api/link-endpoint', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${accessToken}`,
+      },
       body: JSON.stringify({ endpointId, userId: session.user.id }),
     });
     const payload = await response.json();
 
     if (!response.ok) {
       setLinkMessage(payload?.detail || payload?.error || 'Failed to link endpoint.');
+      setLinkStatus('error');
       setLinking(false);
       return;
     }
 
     const linkedCount = typeof payload?.linkedScanCount === 'number' ? payload.linkedScanCount : 0;
-    const warning = payload?.ownerWarning ? ` ${payload.ownerWarning}` : '';
-    setLinkMessage(`Endpoint linked successfully. ${linkedCount} existing scan(s) were associated.${warning}`);
+    setLinkMessage(`Endpoint linked successfully. ${linkedCount} existing scan(s) were associated.`);
+    setLinkStatus('success');
     setEndpointIdInput('');
     setLinking(false);
   };
@@ -667,7 +682,11 @@ function UserDashboard({ session, onSignOut }: { session: Session; onSignOut: ()
               {linking ? 'Linking...' : 'Link Endpoint'}
             </button>
           </div>
-          {linkMessage && <p className="mt-3 text-sm text-emerald-300">{linkMessage}</p>}
+          {linkMessage && (
+            <p className={`mt-3 text-sm ${linkStatus === 'error' ? 'text-red-300' : 'text-emerald-300'}`}>
+              {linkMessage}
+            </p>
+          )}
         </div>
 
         <div className="glass-panel overflow-hidden">

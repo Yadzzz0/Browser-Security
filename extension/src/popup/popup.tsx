@@ -382,39 +382,6 @@ function App() {
             </div>
           ) : null}
 
-          <div style={{ marginTop: 10, paddingTop: 10, borderTop: '1px solid rgba(255,255,255,0.06)' }}>
-            <button
-              onClick={() => {
-                const portalUrl = 'https://browser-security.vercel.app'; // Replace with actual deployment URL
-                chrome.tabs.create({ url: portalUrl });
-              }}
-              style={{
-                width: '100%',
-                padding: '10px',
-                borderRadius: 10,
-                background: 'rgba(16,185,129,0.1)',
-                border: '1px solid rgba(16,185,129,0.2)',
-                color: '#10b981',
-                fontSize: 12,
-                fontWeight: 600,
-                cursor: 'pointer',
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'center',
-                gap: 6,
-                transition: 'all 0.15s',
-              }}
-              onMouseOver={(e) => { e.currentTarget.style.background = 'rgba(16,185,129,0.2)'; }}
-              onMouseOut={(e) => { e.currentTarget.style.background = 'rgba(16,185,129,0.1)'; }}
-            >
-              <ShieldCheckIcon />
-              Login / View Profile
-            </button>
-            <p style={{ fontSize: 9, color: 'rgba(255,255,255,0.25)', textAlign: 'center', marginTop: 8 }}>
-              Link this endpoint ID in the portal to track your security history.
-            </p>
-          </div>
-
           <div style={{ marginTop: 10, paddingTop: 8, borderTop: '1px dashed rgba(255,255,255,0.08)' }}>
             <div style={{ fontSize: 10, color: 'rgba(255,255,255,0.35)', marginBottom: 2, textTransform: 'uppercase', letterSpacing: '0.06em' }}>
               Endpoint ID
