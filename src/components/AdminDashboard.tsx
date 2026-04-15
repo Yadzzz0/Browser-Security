@@ -525,8 +525,6 @@ function useUserThreats(userId: string) {
     async function fetchUserLogs() {
       setLoading(true);
 
-      let userScopedRows: any[] = [];
-
       const byUserId = await supabase
         .from('browser_scan_logs')
         .select('*')
@@ -534,33 +532,48 @@ function useUserThreats(userId: string) {
         .order('created_at', { ascending: false })
         .limit(200);
 
-      if (!byUserId.error && byUserId.data) {
-        userScopedRows = byUserId.data;
-      } else {
-        const ownerRows = await supabase.from('browser_endpoint_owners').select('endpoint_id').eq('user_id', userId);
-        const endpointIds = (ownerRows.data || []).map((row: any) => row.endpoint_id).filter(Boolean);
-        if (endpointIds.length > 0) {
-          const byEndpoint = await supabase
-            .from('browser_scan_logs')
-            .select('*')
-            .in('endpoint_id', endpointIds)
-            .order('created_at', { ascending: false })
-            .limit(200);
-          if (!byEndpoint.error && byEndpoint.data) {
-            userScopedRows = byEndpoint.data;
-          }
+      const userScopedRows = !byUserId.error && byUserId.data ? byUserId.data : [];
+
+      const ownerRows = await supabase
+        .from('browser_endpoint_owners')
+        .select('endpoint_id')
+        .eq('user_id', userId);
+
+      const endpointIds = (ownerRows.data || []).map((row: any) => row.endpoint_id).filter(Boolean);
+      let endpointScopedRows: any[] = [];
+      if (endpointIds.length > 0) {
+        const byEndpoint = await supabase
+          .from('browser_scan_logs')
+          .select('*')
+          .in('endpoint_id', endpointIds)
+          .order('created_at', { ascending: false })
+          .limit(200);
+
+        if (!byEndpoint.error && byEndpoint.data) {
+          endpointScopedRows = byEndpoint.data;
         }
       }
 
-      const mapped = userScopedRows.map((row: any) => ({
-        id: String(row.id || '').slice(0, 8),
-        time: new Date(row.created_at).toLocaleTimeString(),
-        date: new Date(row.created_at).toLocaleDateString(),
-        url: (row.url || '').replace(/^https?:\/\//, ''),
-        action: row.action_taken || (row.status === 'danger' ? 'Blocked' : row.status === 'warning' ? 'Warned' : 'Passed'),
-        confidence: `${Math.round((row.confidence || 0) * 1000) / 10}%`,
-        endpoint_id: row.endpoint_id || 'Unknown',
-      }));
+      const mergedRows = [...userScopedRows, ...endpointScopedRows];
+      const dedupedRows = Array.from(
+        new Map(mergedRows.map((row: any) => [String(row.id), row])).values()
+      );
+
+      const mapped = dedupedRows
+        .sort((a: any, b: any) => {
+          const ta = new Date(a.created_at || 0).getTime();
+          const tb = new Date(b.created_at || 0).getTime();
+          return tb - ta;
+        })
+        .map((row: any) => ({
+          id: String(row.id || '').slice(0, 8),
+          time: new Date(row.created_at).toLocaleTimeString(),
+          date: new Date(row.created_at).toLocaleDateString(),
+          url: (row.url || '').replace(/^https?:\/\//, ''),
+          action: row.action_taken || (row.status === 'danger' ? 'Blocked' : row.status === 'warning' ? 'Warned' : 'Passed'),
+          confidence: `${Math.round((row.confidence || 0) * 1000) / 10}%`,
+          endpoint_id: row.endpoint_id || 'Unknown',
+        }));
 
       setLogs(mapped);
       setLoading(false);

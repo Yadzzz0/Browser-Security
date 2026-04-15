@@ -166,6 +166,10 @@ function getQuickVerdict(parsedUrl: URL): QuickVerdict {
 async function logScanToSupabase(payload: ScanLogPayload): Promise<void> {
   if (!payload.endpointId && !payload.userId) return;
 
+  const normalizedEndpointId =
+    typeof payload.endpointId === 'string' ? payload.endpointId.trim().toLowerCase() : undefined;
+  const normalizedUserId = typeof payload.userId === 'string' ? payload.userId.trim() : undefined;
+
   const supabaseUrl = process.env.SUPABASE_URL || process.env.VITE_SUPABASE_URL;
   const supabaseApiKey =
     process.env.SUPABASE_SERVICE_ROLE_KEY ||
@@ -178,7 +182,7 @@ async function logScanToSupabase(payload: ScanLogPayload): Promise<void> {
     payload.status === 'danger' ? 'Blocked' : payload.status === 'warning' ? 'Warned' : 'Passed';
 
   const baseInsert = {
-    endpoint_id: payload.endpointId,
+    endpoint_id: normalizedEndpointId,
     url: payload.url,
     status: payload.status,
     confidence: payload.confidence,
@@ -186,8 +190,8 @@ async function logScanToSupabase(payload: ScanLogPayload): Promise<void> {
     action_taken: actionTaken,
   };
 
-  if (payload.userId) {
-    const withUser = { ...baseInsert, user_id: payload.userId };
+  if (normalizedUserId) {
+    const withUser = { ...baseInsert, user_id: normalizedUserId };
     const withUserRes = await supabase.from('browser_scan_logs').insert(withUser);
     if (!withUserRes.error) return;
     console.error('[check-url] Failed to insert user-linked scan log:', withUserRes.error.message);

@@ -79,7 +79,32 @@ alter table public.browser_endpoint_owners add column if not exists created_at t
 alter table public.browser_endpoint_owners add column if not exists updated_at timestamptz;
 alter table public.browser_endpoint_owners add column if not exists ip_address text;
 alter table public.browser_endpoint_owners add column if not exists os_type text;
+
+-- Normalize endpoint IDs so linking works consistently regardless of letter casing.
+with ranked as (
+  select
+    ctid,
+    row_number() over (
+      partition by lower(trim(endpoint_id))
+      order by updated_at desc nulls last, created_at desc nulls last
+    ) as rn
+  from public.browser_endpoint_owners
+  where endpoint_id is not null
+)
+delete from public.browser_endpoint_owners e
+using ranked r
+where e.ctid = r.ctid and r.rn > 1;
+
+update public.browser_endpoint_owners
+set endpoint_id = lower(trim(endpoint_id))
+where endpoint_id is not null and endpoint_id <> lower(trim(endpoint_id));
+
+update public.browser_scan_logs
+set endpoint_id = lower(trim(endpoint_id))
+where endpoint_id is not null and endpoint_id <> lower(trim(endpoint_id));
+
 create unique index if not exists endpoint_owners_endpoint_id_key on public.browser_endpoint_owners(endpoint_id);
+create unique index if not exists browser_endpoint_owners_endpoint_id_lower_key on public.browser_endpoint_owners((lower(endpoint_id)));
 
 alter table public.browser_scan_logs add column if not exists user_id uuid references auth.users(id) on delete set null;
 alter table public.browser_scan_logs add column if not exists created_at timestamptz not null default now();

@@ -9,7 +9,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   if (req.method === 'OPTIONS') return res.status(200).end();
   if (req.method !== 'POST') return res.status(405).json({ error: 'Method not allowed' });
 
-  const endpointId = typeof req.body?.endpointId === 'string' ? req.body.endpointId.trim() : '';
+  const endpointId = typeof req.body?.endpointId === 'string' ? req.body.endpointId.trim().toLowerCase() : '';
   const userId = typeof req.body?.userId === 'string' ? req.body.userId.trim() : '';
   const authHeader = typeof req.headers.authorization === 'string' ? req.headers.authorization : '';
   const accessToken = authHeader.startsWith('Bearer ') ? authHeader.slice(7).trim() : '';
@@ -50,9 +50,17 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
   let ownerLinked = false;
 
+  const ownerLookup = await supabase
+    .from('browser_endpoint_owners')
+    .select('endpoint_id')
+    .ilike('endpoint_id', endpointId)
+    .maybeSingle();
+
+  const canonicalEndpointId = ownerLookup.data?.endpoint_id || endpointId;
+
   const ownerResult = await supabase.from('browser_endpoint_owners').upsert(
     {
-      endpoint_id: endpointId,
+      endpoint_id: canonicalEndpointId,
       user_id: userId,
       device_name: 'Linked via user portal',
     },
@@ -67,24 +75,45 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   }
   ownerLinked = true;
 
-  const updateResult = await supabase
+  const exactUpdate = await supabase
     .from('browser_scan_logs')
     .update({ user_id: userId })
-    .eq('endpoint_id', endpointId)
+    .eq('endpoint_id', canonicalEndpointId)
     .or(`user_id.is.null,user_id.eq.${userId}`)
     .select('id');
 
-  if (updateResult.error) {
+  if (exactUpdate.error) {
     return res.status(500).json({
       error: 'Failed to link scan logs to this user',
-      detail: updateResult.error.message,
+      detail: exactUpdate.error.message,
     });
+  }
+
+  let linkedRows = exactUpdate.data || [];
+
+  // Fallback in case endpoint IDs were stored with different letter casing historically.
+  if (linkedRows.length === 0) {
+    const caseInsensitiveUpdate = await supabase
+      .from('browser_scan_logs')
+      .update({ user_id: userId })
+      .ilike('endpoint_id', canonicalEndpointId)
+      .or(`user_id.is.null,user_id.eq.${userId}`)
+      .select('id');
+
+    if (caseInsensitiveUpdate.error) {
+      return res.status(500).json({
+        error: 'Failed to link scan logs to this user',
+        detail: caseInsensitiveUpdate.error.message,
+      });
+    }
+
+    linkedRows = caseInsensitiveUpdate.data || [];
   }
 
   return res.status(200).json({
     success: true,
-    endpointId,
+    endpointId: canonicalEndpointId,
     ownerLinked,
-    linkedScanCount: updateResult.data?.length || 0,
+    linkedScanCount: linkedRows.length,
   });
 }
