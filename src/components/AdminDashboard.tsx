@@ -139,7 +139,12 @@ function LoginScreen() {
 
     if (mode === 'login') {
       const { error: loginError } = await supabase.auth.signInWithPassword({ email, password });
-      if (loginError) setError(loginError.message);
+      if (loginError) {
+        const loginMessage = loginError.message.toLowerCase().includes('invalid login credentials')
+          ? 'Invalid email or password. If this is a new account, ask admin to create it or retry later.'
+          : loginError.message;
+        setError(loginMessage);
+      }
       setLoading(false);
       return;
     }
@@ -150,14 +155,16 @@ function LoginScreen() {
       password,
       options: {
         data: {
-          role: 'user',
           display_name: safeName,
         },
       },
     });
 
     if (signUpError) {
-      setError(signUpError.message);
+      const signUpMessage = signUpError.message.toLowerCase().includes('email rate limit')
+        ? 'Signup is temporarily rate-limited by Supabase email settings. Please retry later or ask admin to create your account.'
+        : signUpError.message;
+      setError(signUpMessage);
       setLoading(false);
       return;
     }
@@ -172,10 +179,13 @@ function LoginScreen() {
 
       const withRole = await supabase.from('browser_user_profiles').upsert(profileInsert, { onConflict: 'id' });
       if (withRole.error) {
-        await supabase.from('browser_user_profiles').upsert(
+        const fallbackProfile = await supabase.from('browser_user_profiles').upsert(
           { id: data.user.id, email: data.user.email, display_name: safeName },
           { onConflict: 'id' }
         );
+        if (fallbackProfile.error) {
+          setInfo('Account created, but profile sync is pending. Login should still work once auth is active.');
+        }
       }
     }
 
