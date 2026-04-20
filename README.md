@@ -67,8 +67,7 @@ Then in Chrome:
 3. Pay the one-time $5 developer fee
 4. Upload the zip, fill in store listing, submit for review (~3-7 days)
 
-> [!NOTE]
-> For your university FYP demo, sideloading is perfectly sufficient. Chrome Web Store is only needed for public distribution.
+
 
 ---
 
