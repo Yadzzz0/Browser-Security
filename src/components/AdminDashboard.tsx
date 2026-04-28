@@ -1133,7 +1133,7 @@ function MLModelsView() {
               </div>
               <div>
                 <h2 className="font-display font-semibold text-lg">ModernBERT Phishing Detector</h2>
-                <p className="text-sm text-white/40 font-mono">{health?.endpoint || 'alimusarizvi-phishing.hf.space'}</p>
+               
               </div>
             </div>
             <div className={`flex items-center gap-2 px-3 py-1.5 rounded-full text-sm font-medium border ${
